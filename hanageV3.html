@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ハナゲー - 鼻毛を抜け！</title>
+<style>
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  body {
+    margin: 0;
+    padding: 0;
+    background: #1a1a2e;
+    color: #eee;
+    font-family: "Hiragino Sans", "Meiryo", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+    user-select: none;
+  }
+  h1 {
+    margin: 10px 0 4px;
+    font-size: clamp(22px, 6vw, 28px);
+    text-shadow: 0 0 8px #ff6b6b;
+  }
+  #info {
+    font-size: clamp(14px, 4vw, 16px);
+    margin-bottom: 6px;
+  }
+  #game-container {
+    width: 100%;
+    max-width: 480px;
+    padding: 0 8px;
+    display: flex;
+    justify-content: center;
+  }
+  canvas {
+    width: 100%;
+    max-width: 480px;
+    height: auto;
+    aspect-ratio: 480 / 520;
+    background: #16213e;
+    border: 4px solid #e94560;
+    border-radius: 12px;
+    cursor: crosshair;
+    box-shadow: 0 0 30px rgba(233, 69, 96, 0.4);
+    display: block;
+  }
+  #message {
+    margin-top: 10px;
+    font-size: clamp(16px, 4.5vw, 20px);
+    min-height: 28px;
+    color: #ffcc00;
+    text-align: center;
+    padding: 0 10px;
+    font-weight: bold;
+  }
+  #ranking {
+    margin-top: 12px;
+    font-size: 15px;
+    text-align: center;
+    line-height: 1.6;
+    color: #a0e7e5;
+  }
+  #ranking .rank1 { color: #ffd700; font-weight: bold; font-size: 17px; }
+  #ranking .rank2 { color: #c0c0c0; }
+  #ranking .rank3 { color: #cd7f32; }
+  #sound-toggle {
+    margin-top: 10px;
+    padding: 6px 14px;
+    font-size: 14px;
+    background: #e94560;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <h1>ハナゲー</h1>
+  <div id="info">
+    スコア: <span id="score">0</span>　｜　コンボ: <span id="combo">0</span>　｜　ミス: <span id="miss">0</span>/3
+  </div>
+  <div id="game-container">
+    <canvas id="c" width="480" height="520"></canvas>
+  </div>
+  <div id="message">鼻毛が見えたらタップ/クリックで抜け！</div>
+  
+  <div id="ranking">
+    <div>── ハイスコア ──</div>
+    <div id="rank1" class="rank1">1位: 0</div>
+    <div id="rank2" class="rank2">2位: 0</div>
+    <div id="rank3" class="rank3">3位: 0</div>
+  </div>
+
+  <button id="sound-toggle">🔊 音ON</button>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const comboEl = document.getElementById('combo');
+const missEl = document.getElementById('miss');
+const messageEl = document.getElementById('message');
+const soundToggle = document.getElementById('sound-toggle');
+const rank1El = document.getElementById('rank1');
+const rank2El = document.getElementById('rank2');
+const rank3El = document.getElementById('rank3');
+
+let score = 0;
+let combo = 0;
+let misses = 0;
+let hairs = [];
+let soundEnabled = true;
+let audioCtx = null;
+let gameOver = false;
+let spawnTimer = 0;
+let gameTime = 0;
+
+// ハイスコア（トップ3）
+let highScores = [0, 0, 0];
+
+const face = { x: 240, y: 260, radius: 140 };
+const nose = { x: 240, y: 270, width: 38, height: 55 };
+
+const eyeLineY = face.y - 22;
+const mouthLineY = face.y + 108;
+
+// ===== ハイスコア関連 =====
+function loadHighScores() {
+  const saved = localStorage.getItem('hanage_highscores');
+  if (saved) {
+    try {
+      highScores = JSON.parse(saved);
+      // 念のため3つ揃える
+      while (highScores.length < 3) highScores.push(0);
+      highScores = highScores.slice(0, 3);
+    } catch (e) {
+      highScores = [0, 0, 0];
+    }
+  }
+  updateRankingDisplay();
+}
+
+function saveHighScores() {
+  localStorage.setItem('hanage_highscores', JSON.stringify(highScores));
+}
+
+function updateRankingDisplay() {
+  rank1El.textContent = `1位: ${highScores[0]}`;
+  rank2El.textContent = `2位: ${highScores[1]}`;
+  rank3El.textContent = `3位: ${highScores[2]}`;
+}
+
+function checkAndUpdateHighScore(newScore) {
+  // 現在のスコアがトップ3に入るか判定
+  let rank = 0; // 0=圏外, 1=1位, 2=2位, 3=3位
+
+  if (newScore > highScores[0]) {
+    rank = 1;
+    highScores[2] = highScores[1];
+    highScores[1] = highScores[0];
+    highScores[0] = newScore;
+  } else if (newScore > highScores[1]) {
+    rank = 2;
+    highScores[2] = highScores[1];
+    highScores[1] = newScore;
+  } else if (newScore > highScores[2]) {
+    rank = 3;
+    highScores[2] = newScore;
+  }
+
+  if (rank > 0) {
+    saveHighScores();
+    updateRankingDisplay();
+  }
+  return rank;
+}
+
+// ===== 音関連 =====
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+function playPluckSound() {
+  if (!soundEnabled || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  const bufferSize = audioCtx.sampleRate * 0.08;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2.5);
+  }
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buffer;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.value = 800 + Math.random() * 600;
+  filter.Q.value = 1.5;
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.35, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+  noise.start(now);
+  noise.stop(now + 0.08);
+}
+
+function playMissSound() {
+  if (!soundEnabled || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(180, now);
+  osc.frequency.exponentialRampToValueAtTime(80, now + 0.12);
+  gain.gain.setValueAtTime(0.12, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 0.12);
+}
+
+function playGameOverSound() {
+  if (!soundEnabled || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(220, now);
+  osc.frequency.exponentialRampToValueAtTime(60, now + 0.4);
+  gain.gain.setValueAtTime(0.15, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 0.4);
+}
+
+soundToggle.addEventListener('click', () => {
+  soundEnabled = !soundEnabled;
+  soundToggle.textContent = soundEnabled ? '🔊 音ON' : '🔇 音OFF';
+  if (soundEnabled) initAudio();
+});
+
+// ===== 鼻毛クラス =====
+class Hair {
+  constructor(initialLength = null) {
+    this.baseX = nose.x + (Math.random() - 0.5) * 28;
+    this.baseY = nose.y + 18 + Math.random() * 12;
+
+    const isDown = Math.random() < 0.42;
+    if (isDown) {
+      this.angle = Math.PI + (Math.random() - 0.5) * 0.9;
+      this.direction = 'down';
+    } else {
+      this.angle = (Math.random() - 0.5) * 1.1;
+      this.direction = 'up';
+    }
+
+    this.length = initialLength !== null ? initialLength : (6 + Math.random() * 8);
+    this.thickness = 1.8 + Math.random() * 1.2;
+    this.color = `hsl(${20 + Math.random()*20}, 40%, ${25 + Math.random()*15}%)`;
+    this.growing = true;
+    this.maxLength = 32 + Math.random() * 45;
+    this.baseSpeed = (0.07 + Math.random() * 0.11) * 0.3; // 30%
+    this.alive = true;
+  }
+
+  getTip() {
+    return {
+      x: this.baseX + Math.sin(this.angle) * this.length,
+      y: this.baseY - Math.cos(this.angle) * this.length
+    };
+  }
+
+  update(speedMultiplier) {
+    if (this.growing && this.length < this.maxLength) {
+      this.length += this.baseSpeed * speedMultiplier;
+    }
+  }
+
+  draw() {
+    if (!this.alive) return;
+    ctx.save();
+    ctx.translate(this.baseX, this.baseY);
+    ctx.rotate(this.angle);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(2, -this.length * 0.5, -1, -this.length);
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.thickness;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  isHit(mx, my) {
+    const tip = this.getTip();
+    return Math.hypot(mx - tip.x, my - tip.y) < 16;
+  }
+
+  isDanger() {
+    const tip = this.getTip();
+    if (this.direction === 'up' && tip.y < eyeLineY) return true;
+    if (this.direction === 'down' && tip.y > mouthLineY) return true;
+    return false;
+  }
+}
+
+function spawnHair(initialLength = null) {
+  if (gameOver) return;
+  if (hairs.filter(h => h.alive).length < 16) {
+    hairs.push(new Hair(initialLength));
+  }
+}
+
+function drawDangerLines() {
+  ctx.save();
+  ctx.strokeStyle = '#a3e635';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 5]);
+  ctx.globalAlpha = 0.85;
+
+  ctx.beginPath();
+  ctx.moveTo(face.x - 95, eyeLineY);
+  ctx.lineTo(face.x + 95, eyeLineY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(face.x - 70, mouthLineY);
+  ctx.lineTo(face.x + 70, mouthLineY);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawFace() {
+  ctx.beginPath();
+  ctx.arc(face.x, face.y, face.radius, 0, Math.PI * 2);
+  ctx.fillStyle = '#f5d0a9';
+  ctx.fill();
+  ctx.strokeStyle = '#d4a373';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.ellipse(face.x - 55, face.y - 40, 12, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(face.x + 55, face.y - 40, 12, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(face.x - 52, face.y - 48, 4, 0, Math.PI * 2);
+  ctx.arc(face.x + 58, face.y - 48, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(nose.x - nose.width/2, nose.y - 10);
+  ctx.quadraticCurveTo(nose.x, nose.y + nose.height, nose.x + nose.width/2, nose.y - 10);
+  ctx.strokeStyle = '#c9a373';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.fillStyle = '#8b5e3c';
+  ctx.beginPath();
+  ctx.ellipse(nose.x - 9, nose.y + 22, 6, 4, -0.3, 0, Math.PI * 2);
+  ctx.ellipse(nose.x + 9, nose.y + 22, 6, 4, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(face.x, face.y + 70, 35, 0.15, Math.PI - 0.15);
+  ctx.strokeStyle = '#a0525a';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  drawDangerLines();
+}
+
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+
+  let clientX, clientY;
+  if (e.touches && e.touches.length > 0) {
+    clientX = e.touches[0].clientX;
+    clientY = e.touches[0].clientY;
+  } else if (e.changedTouches && e.changedTouches.length > 0) {
+    clientX = e.changedTouches[0].clientX;
+    clientY = e.changedTouches[0].clientY;
+  } else {
+    clientX = e.clientX;
+    clientY = e.clientY;
+  }
+
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+function resetGame() {
+  score = 0;
+  combo = 0;
+  misses = 0;
+  hairs = [];
+  gameOver = false;
+  spawnTimer = 0;
+  gameTime = 0;
+  scoreEl.textContent = score;
+  comboEl.textContent = combo;
+  missEl.textContent = misses;
+  messageEl.textContent = '鼻毛が見えたらタップ/クリックで抜け！';
+  messageEl.style.color = '#ffcc00';
+
+  spawnHair(18);
+  spawnHair(14);
+  spawnHair(10);
+  spawnHair(8);
+}
+
+function triggerGameOver(reason) {
+  if (gameOver) return;
+  gameOver = true;
+  playGameOverSound();
+
+  // ハイスコア判定
+  const rank = checkAndUpdateHighScore(score);
+
+  let msg = `ゲームオーバー！ ${reason}<br>スコア: ${score}`;
+
+  if (rank === 1) {
+    msg = `🎉 ハイスコア更新！ 1位！ 🎉<br>スコア: ${score}`;
+    messageEl.style.color = '#ffd700';
+  } else if (rank === 2) {
+    msg = `✨ ランクイン！ 2位！ ✨<br>スコア: ${score}`;
+    messageEl.style.color = '#c0c0c0';
+  } else if (rank === 3) {
+    msg = `✨ ランクイン！ 3位！ ✨<br>スコア: ${score}`;
+    messageEl.style.color = '#cd7f32';
+  } else {
+    messageEl.style.color = '#ffcc00';
+  }
+
+  msg += `<br>→ タップでリスタート`;
+  messageEl.innerHTML = msg;
+}
+
+function handleInput(e) {
+  e.preventDefault();
+  initAudio();
+
+  if (gameOver) {
+    resetGame();
+    return;
+  }
+
+  const pos = getCanvasPos(e);
+  let plucked = false;
+
+  for (let i = hairs.length - 1; i >= 0; i--) {
+    const h = hairs[i];
+    if (h.alive && h.isHit(pos.x, pos.y)) {
+      h.alive = false;
+      combo++;
+      const base = Math.floor(h.length / 3) + 1;
+      const multiplier = 1 + Math.floor(combo / 2) * 0.5;
+      const addScore = Math.floor(base * multiplier);
+      score += addScore;
+
+      plucked = true;
+      playPluckSound();
+
+      const msgs = ['ぬけた！', 'いい感じ！', 'スッキリ！', 'よし！', 'コンボ！', '上手い！'];
+      messageEl.textContent = msgs[Math.floor(Math.random() * msgs.length)] + (combo >= 3 ? ` ×${combo}` : '');
+      messageEl.style.color = '#ffcc00';
+      break;
+    }
+  }
+
+  if (!plucked) {
+    misses++;
+    combo = 0;
+    playMissSound();
+    messageEl.textContent = `そこじゃない…！ ミス ${misses}/3`;
+    messageEl.style.color = '#ffcc00';
+    if (misses >= 3) {
+      triggerGameOver('ミス3回');
+    }
+  }
+
+  scoreEl.textContent = score;
+  comboEl.textContent = combo;
+  missEl.textContent = misses;
+}
+
+canvas.addEventListener('click', handleInput);
+canvas.addEventListener('touchstart', handleInput, { passive: false });
+canvas.addEventListener('touchend', e => e.preventDefault(), { passive: false });
+
+function loop() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawFace();
+
+  if (!gameOver) {
+    gameTime++;
+    const speedMultiplier = 1 + Math.min(gameTime / 1400, 2.0);
+
+    let aliveCount = 0;
+    for (const h of hairs) {
+      if (h.alive) {
+        h.update(speedMultiplier);
+        h.draw();
+        aliveCount++;
+
+        if (h.isDanger()) {
+          const reason = h.direction === 'up' ? '目のラインを超えた' : '口のラインを超えた';
+          triggerGameOver(reason);
+        }
+      }
+    }
+
+    spawnTimer++;
+    const spawnInterval = Math.max(30, 60 - Math.floor(gameTime / 350));
+    if (spawnTimer > spawnInterval) {
+      spawnHair();
+      spawnTimer = 0;
+    }
+
+    if (aliveCount >= 13) {
+      messageEl.textContent = '鼻毛だらけだ…！もっと抜け！';
+    }
+  } else {
+    for (const h of hairs) {
+      if (h.alive) h.draw();
+    }
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// 初期化
+loadHighScores();
+resetGame();
+loop();
+</script>
+</body>
+</html>
